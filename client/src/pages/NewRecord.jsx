@@ -66,9 +66,7 @@ export default function NewRecord({ token }) {
         data.append('signature', new File([blob], 'signature.png', { type: 'image/png' }));
       }
 
-      const r = await client.post('/maintenance-records', data, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const r = await client.post('/maintenance-records', data);
       alert('Saved record #' + r.data.id);
       setForm({
         unit_id: '',
