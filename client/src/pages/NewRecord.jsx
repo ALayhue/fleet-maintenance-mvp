@@ -56,11 +56,20 @@ export default function NewRecord({ token }) {
         </select>
       </label>
       <label>Unit
-        <select required value={form.unit_id} onChange={e=>setForm(f=>({...f, unit_id:e.target.value}))}>
-          <option value="">Select unit</option>
-          {units.map(u => <option key={u.id} value={u.id}>{u.unit_number} ({u.type})</option>)}
-        </select>
-      </label>
+  <select
+    required
+    value={form.unit_id}
+    onChange={e => setForm(f => ({ ...f, unit_id: e.target.value }))}
+  >
+    <option value="">Select unit</option>
+    {units.map(u => (
+      <option key={u.id} value={u.id}>
+        {u.unit_number} ({u.type})
+      </option>
+    ))}
+  </select>
+</label>
+
       <label>Mileage <input required value={form.mileage} onChange={e=>setForm(f=>({...f, mileage:e.target.value}))} /></label>
       <label>Driver Name <input value={form.driver_name} onChange={e=>setForm(f=>({...f, driver_name:e.target.value}))} placeholder="(optional)"/></label>
       <label>Company Doing the Work <input value={form.company_name} onChange={e=>setForm(f=>({...f, company_name:e.target.value}))} /></label>
@@ -96,3 +105,14 @@ export default function NewRecord({ token }) {
     </form>
   )
 }
+e.preventDefault();
+
+// Accept "100000" or "100,000"
+const mileageClean = String(form.mileage).replace(/[^0-9.]/g, '');
+
+if (!form.unit_id) { alert('Please select a unit.'); return; }
+if (!mileageClean || isNaN(Number(mileageClean))) {
+  alert('Please enter a valid mileage (numbers only).');
+  return;
+}
+data.append('mileage', mileageClean);
