@@ -112,10 +112,14 @@ app.get('/api/checklist-templates', auth(), (req, res) => {
 // Create maintenance record
 app.post('/api/maintenance-records', auth(), (req, res) => {
   try {
+ 
     const {
-      unit_id, driver_id, technician_id, company_name, mileage,
-      estimated_time_minutes, notes, checklistItems
-    } = req.body;
+  unit_id, driver_id, technician_id, company_name, mileage,
+  estimated_time_minutes, notes, checklistItems, status 
+} = req.body;
+
+// ...
+const recStatus = status === 'completed' ? 'completed' : 'in_progress';
 
     if (!unit_id) return res.status(400).json({ error: 'unit_id is required' });
 
@@ -142,10 +146,19 @@ app.post('/api/maintenance-records', auth(), (req, res) => {
       signature_url = '/uploads/' + name;
     }
 
-    const insertRec = db.prepare(`INSERT INTO maintenance_records
-      (unit_id, driver_id, technician_id, company_name, mileage, estimated_time_minutes, notes, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'))`);
-    const info = insertRec.run(unit_id, driverId || null, technician_id || null, company_name || '', mileageNum, estimated_time_minutes || 0, notes || '');
+const insertRec = db.prepare(`INSERT INTO maintenance_records
+  (unit_id, driver_id, technician_id, company_name, mileage, estimated_time_minutes, notes, status, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`);
+const info = insertRec.run(
+  unit_id,
+  driverId || null,
+  technician_id || null,
+  company_name || '',
+  mileageNum || 0,
+  estimated_time_minutes || 0,
+  notes || '',
+  recStatus                    
+);
     const record_id = info.lastInsertRowid;
 
     if (signature_url) {
@@ -186,17 +199,48 @@ app.post('/api/maintenance-records', auth(), (req, res) => {
 
 // List maintenance records (filter by unit_id)
 app.get('/api/maintenance-records', auth(), (req, res) => {
-  const { unit_id } = req.query;
+  const { unit_id, status, include_items } = req.query;
+
+  // Build base query
   let rows;
   if (unit_id) {
-    rows = db.prepare(`SELECT mr.*, u.unit_number FROM maintenance_records mr
-                       JOIN units u ON u.id = mr.unit_id WHERE unit_id = ? ORDER BY created_at DESC`).all(unit_id);
+    rows = db.prepare(`
+      SELECT mr.*, u.unit_number
+      FROM maintenance_records mr
+      JOIN units u ON u.id = mr.unit_id
+      WHERE mr.unit_id = ?
+      ${status ? `AND mr.status = '${status}'` : ''}
+      ORDER BY mr.created_at DESC
+    `).all(unit_id);
   } else {
-    rows = db.prepare(`SELECT mr.*, u.unit_number FROM maintenance_records mr
-                       JOIN units u ON u.id = mr.unit_id ORDER BY created_at DESC`).all();
+    rows = db.prepare(`
+      SELECT mr.*, u.unit_number
+      FROM maintenance_records mr
+      JOIN units u ON u.id = mr.unit_id
+      ${status ? `WHERE mr.status = '${status}'` : ''}
+      ORDER BY mr.created_at DESC
+    `).all();
   }
+
+  if (include_items === '1') {
+    const itemsStmt = db.prepare(`
+      SELECT mri.*, COALESCE(ci.item_name, 'Item') AS item_name
+      FROM maintenance_record_items mri
+      LEFT JOIN checklist_items ci ON ci.id = mri.item_id
+      WHERE mri.record_id = ?
+        AND (mri.status != 'pass' OR COALESCE(mri.comments,'') != '')
+    `);
+    rows.forEach(r => {
+      const its = itemsStmt.all(r.id);
+      r.issues = its.map(it =>
+        `${it.item_name}: ${it.status}${it.comments ? ` (${it.comments})` : ''}`
+      );
+    });
+  }
+
   res.json(rows);
 });
+
 
 // Users (admin can create technicians/drivers)
 app.get('/api/users', auth('admin'), (req, res) => {
@@ -231,4 +275,14 @@ createDefaultUsers();
 
 server.listen(PORT, () => {
   console.log(`Server listening on :${PORT}`);
+});
+
+app.patch('/api/maintenance-records/:id', auth('admin'), (req, res) => {
+  const { status } = req.body;
+  if (!status || !['in_progress','completed'].includes(status)) {
+    return res.status(400).json({ error: 'status must be in_progress or completed' });
+  }
+  db.prepare(`UPDATE maintenance_records SET status = ? WHERE id = ?`)
+    .run(status, req.params.id);
+  res.json({ ok: true });
 });
