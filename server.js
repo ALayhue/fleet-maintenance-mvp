@@ -116,6 +116,17 @@ app.post('/api/maintenance-records', auth(), (req, res) => {
     unit_id, driver_id, technician_id, company_name, mileage,
     estimated_time_minutes, notes, checklistItems // [{item_id, status, comments}]
   } = req.body;
+ 
+  // Require a unit to be selected
+if (!unit_id) return res.status(400).json({ error: 'unit_id is required' });
+
+// Normalize mileage (accept 100000 or 100,000)
+let mileageNum = 0;
+try { mileageNum = Number(String(mileage || '').replace(/[^0-9.]/g, '')); } catch {}
+if (!mileageNum || Number.isNaN(mileageNum)) {
+  return res.status(400).json({ error: 'Valid mileage is required' });
+}
+
 
   // Save signature/photo uploads if present
   let signature_url = null;
@@ -131,7 +142,7 @@ app.post('/api/maintenance-records', auth(), (req, res) => {
     (unit_id, driver_id, technician_id, company_name, mileage, estimated_time_minutes, notes, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'))
   `);
-  const info = insertRec.run(unit_id, driver_id || null, technician_id || null, company_name || '', mileage || 0, estimated_time_minutes || 0, notes || '');
+  const info = insertRec.run(unit_id, driver_id || null, technician_id || null, company_name || '', mileageNum || 0, estimated_time_minutes || 0, notes || '');
   const record_id = info.lastInsertRowid;
 
   if (signature_url) {
