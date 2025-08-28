@@ -111,77 +111,77 @@ app.get('/api/checklist-templates', auth(), (req, res) => {
 
 // Create maintenance record
 app.post('/api/maintenance-records', auth(), (req, res) => {
-  // Expect JSON fields + optional files (photos[], signature)
-  const {
-    unit_id, driver_id, technician_id, company_name, mileage,
-    estimated_time_minutes, notes, checklistItems // [{item_id, status, comments}]
-  } = req.body;
- 
-  // Require a unit to be selected
-if (!unit_id) return res.status(400).json({ error: 'unit_id is required' });
+  try {
+    const {
+      unit_id, driver_id, technician_id, company_name, mileage,
+      estimated_time_minutes, notes, checklistItems
+    } = req.body;
 
-// Normalize mileage (accept 100000 or 100,000)
-let mileageNum = 0;
-try { mileageNum = Number(String(mileage || '').replace(/[^0-9.]/g, '')); } catch {}
-if (!mileageNum || Number.isNaN(mileageNum)) {
-  return res.status(400).json({ error: 'Valid mileage is required' });
-}
+    if (!unit_id) return res.status(400).json({ error: 'unit_id is required' });
 
+    // Normalize mileage: accept 100000 or 100,000
+    let mileageNum = 0;
+    try { mileageNum = Number(String(mileage || '').replace(/[^0-9.]/g, '')); } catch {}
+    if (!mileageNum || Number.isNaN(mileageNum)) {
+      return res.status(400).json({ error: 'Valid mileage is required' });
+    }
 
-  // Save signature/photo uploads if present
-  let signature_url = null;
-  if (req.files && req.files.signature) {
-    const sig = Array.isArray(req.files.signature) ? req.files.signature[0] : req.files.signature;
-    const name = 'sig_' + Date.now() + '_' + sig.name.replace(/\s+/g, '_');
-    const savePath = path.join(uploadsDir, name);
-    sig.mv(savePath);
-    signature_url = '/uploads/' + name;
+    // infer driver from token if role is driver
+    let driverId = driver_id ? Number(driver_id) : null;
+    if (!driverId && req.user && req.user.role === 'driver') {
+      driverId = Number(req.user.id);
+    }
+
+    // handle optional signature
+    let signature_url = null;
+    if (req.files && req.files.signature) {
+      const sig = Array.isArray(req.files.signature) ? req.files.signature[0] : req.files.signature;
+      const name = 'sig_' + Date.now() + '_' + sig.name.replace(/\s+/g, '_');
+      const savePath = require('path').join(process.env.UPLOAD_DIR || require('path').join(__dirname, 'uploads'), name);
+      sig.mv(savePath);
+      signature_url = '/uploads/' + name;
+    }
+
+    const insertRec = db.prepare(`INSERT INTO maintenance_records
+      (unit_id, driver_id, technician_id, company_name, mileage, estimated_time_minutes, notes, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'))`);
+    const info = insertRec.run(unit_id, driverId || null, technician_id || null, company_name || '', mileageNum, estimated_time_minutes || 0, notes || '');
+    const record_id = info.lastInsertRowid;
+
+    if (signature_url) {
+      db.prepare(`INSERT INTO signatures (record_id, signature_image_url, signed_at) VALUES (?, ?, datetime('now'))`)
+        .run(record_id, signature_url);
+    }
+
+    let parsed = [];
+    try { parsed = JSON.parse(checklistItems || '[]'); } catch {}
+    const insertItem = db.prepare(`INSERT INTO maintenance_record_items (record_id, item_id, status, comments, photo_url)
+                                   VALUES (?, ?, ?, ?, ?)`);
+    const tx = db.transaction((items) => {
+      items.forEach(i => insertItem.run(record_id, i.item_id, i.status || 'pass', i.comments || '', i.photo_url || ''));
+    });
+    tx(parsed);
+
+    // notify (unchanged)
+    const unit = db.prepare(`SELECT unit_number FROM units WHERE id = ?`).get(unit_id);
+    const driver = driverId ? db.prepare(`SELECT name FROM users WHERE id = ?`).get(driverId) : { name: 'N/A' };
+    const admins = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
+    io.emit('newRecord', { record_id, unitNumber: unit?.unit_number, driverName: driver?.name || 'N/A' });
+    if (transporter && admins.length) {
+      transporter.sendMail({
+        from: 'noreply@fleet.local',
+        to: admins.join(','),
+        subject: `New maintenance record - Unit ${unit?.unit_number}`,
+        html: `<p>A new maintenance record was submitted by <b>${driver?.name || 'N/A'}</b> for unit <b>${unit?.unit_number}</b>.</p>
+               <p>Estimated time: ${estimated_time_minutes || 0} minutes</p>`
+      }).catch(console.error);
+    }
+
+    return res.status(201).json({ id: record_id });
+  } catch (err) {
+    console.error('[POST /maintenance-records] error:', err);
+    return res.status(500).json({ error: 'server_error' });
   }
-
-  const insertRec = db.prepare(`INSERT INTO maintenance_records
-    (unit_id, driver_id, technician_id, company_name, mileage, estimated_time_minutes, notes, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now'))
-  `);
-  const info = insertRec.run(unit_id, driver_id || null, technician_id || null, company_name || '', mileageNum || 0, estimated_time_minutes || 0, notes || '');
-  const record_id = info.lastInsertRowid;
-
-  if (signature_url) {
-    db.prepare(`INSERT INTO signatures (record_id, signature_image_url, signed_at) VALUES (?, ?, datetime('now'))`)
-      .run(record_id, signature_url);
-  }
-
-  // checklist items
-  let parsed = [];
-  try { parsed = JSON.parse(checklistItems || '[]'); } catch {}
-  const insertItem = db.prepare(`INSERT INTO maintenance_record_items (record_id, item_id, status, comments, photo_url) VALUES (?, ?, ?, ?, ?)`);
-  const insertMany = db.transaction((items) => {
-    items.forEach(i => insertItem.run(record_id, i.item_id, i.status || 'pass', i.comments || '', i.photo_url || ''));
-  });
-  insertMany(parsed);
-
-  // Notify admins
-  const unit = db.prepare(`SELECT unit_number FROM units WHERE id = ?`).get(unit_id);
-  const driver = driver_id ? db.prepare(`SELECT name FROM users WHERE id = ?`).get(driver_id) : { name: 'N/A' };
-  const admins = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
-
-  // Socket.IO broadcast
-  io.emit('newRecord', { record_id, unitNumber: unit?.unit_number, driverName: driver?.name || 'N/A' });
-
-  // Email
-  if (transporter && admins.length) {
-    const mail = {
-      from: 'noreply@fleet.local',
-      to: admins.join(','),
-      subject: `New maintenance record - Unit ${unit?.unit_number}`,
-      html: `<p>A new maintenance record was submitted by <b>${driver?.name || 'N/A'}</b> for unit <b>${unit?.unit_number}</b>.</p>
-             <p>Estimated time: ${estimated_time_minutes || 0} minutes</p>`
-    };
-    transporter.sendMail(mail).catch(console.error);
-  } else {
-    console.log('[notify] New record created for unit', unit?.unit_number);
-  }
-
-  res.status(201).json({ id: record_id });
 });
 
 // List maintenance records (filter by unit_id)
