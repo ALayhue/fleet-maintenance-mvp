@@ -66,6 +66,7 @@ export default function NewRecord({ token }) {
       data.append('estimated_time_minutes', form.estimated_time_minutes || '');
       data.append('notes', form.notes || '');
       data.append('vehicle_type', form.vehicle_type);
+      data.append('status', 'in_progress'); // default new entries to in_progress
       data.append(
         'checklistItems',
         JSON.stringify(items.map(i => ({ item_id: i.id, status: i.status, comments: i.comments })))
