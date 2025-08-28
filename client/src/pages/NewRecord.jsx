@@ -1,3 +1,13 @@
+function dataURLtoBlob(dataUrl) {
+  const [header, base64] = dataUrl.split(',');
+  const mime = (header.match(/data:(.*?);base64/) || [])[1] || 'image/png';
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import SignaturePad from '../components/SignaturePad';
@@ -60,11 +70,11 @@ export default function NewRecord({ token }) {
         'checklistItems',
         JSON.stringify(items.map(i => ({ item_id: i.id, status: i.status, comments: i.comments })))
       );
-      if (signatureDataUrl) {
-        const res = await fetch(signatureDataUrl);
-        const blob = await res.blob();
-        data.append('signature', new File([blob], 'signature.png', { type: 'image/png' }));
-      }
+      // NEW
+if (signatureDataUrl) {
+  const blob = dataURLtoBlob(signatureDataUrl);
+  data.append('signature', new File([blob], 'signature.png', { type: 'image/png' }));
+}
 
       const r = await client.post('/maintenance-records', data);
       alert('Saved record #' + r.data.id);
